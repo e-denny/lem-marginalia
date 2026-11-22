@@ -52,6 +52,42 @@ Only the candidates that can be on screen are annotated (`completion-mode` keeps
 the first `*limit-number-of-items*`), so a directory with thousands of entries
 costs a handful of `lstat` calls rather than thousands.
 
+## Colors
+
+Each field, and each character of the permission string, is painted the way
+Emacs' marginalia paints it: the flags follow the `marginalia--file-modes` pcase
+table (directory/link, read, write, execute, the setuid/setgid/sticky
+characters, and the dim "no permission" dashes), and the size, date and owner
+fields carry `marginalia-size`, `marginalia-date` and `marginalia-file-owner`.
+The palette is what those faces resolve to in doom-one, the theme this was
+modelled on:
+
+| role | attribute | colour |
+|---|---|---|
+| no permission (`-`) | `marginalia-file-mode-no-attribute` | `#5B6268` |
+| directory (`d`) | `marginalia-file-mode-dir-attribute` | `#51afef` |
+| link (`l`) | `marginalia-file-mode-link-attribute` | `#a9a1e1` |
+| read (`r`) | `marginalia-file-mode-read-attribute` | `#ECBE7B` |
+| write (`w`) | `marginalia-file-mode-write-attribute` | `#ff6c6b` |
+| execute (`x`) | `marginalia-file-mode-exec-attribute` | `#98be65` |
+| setuid/setgid/sticky (`s S t T`) | `marginalia-file-mode-other-attribute` | `#c678dd` |
+| rare type character | `marginalia-file-mode-rare-attribute` | `#bbc2cf` |
+| size | `marginalia-file-size-attribute` | `#a9a1e1` |
+| date | `marginalia-file-age-attribute` | `#51afef` |
+| owner | `marginalia-file-owner-attribute` | `#51afef` |
+
+They are plain `define-attribute` forms in `files.lisp`, so changing one is a
+one-line edit followed by `(asdf:load-system "lem-marginalia" :force t)`; a
+Lem theme keyword (`:base0D`, `:base0A`, …) works there too if the colours
+should follow the editor's theme instead.
+
+The colours are per-character `:attribute` properties, set by an `:around`
+method on `lem/popup-menu:apply-print-spec` after Lem has inserted the row. Note
+that the *selected* row is still drawn in the popup's focus attribute, which
+covers the whole line, so its annotation shows the selection colours while the
+other rows show theirs.
+
+
 ## Knobs
 
 | variable | default | meaning |
