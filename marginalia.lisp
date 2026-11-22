@@ -154,18 +154,19 @@ the same screen column on every row, the way marginalia aligns its fields."
         annotated
         (append annotated (nthcdr (length shown) items)))))
 
-;;; Entry point.
+;;; Installation.
 ;;;
 ;;; The annotation is installed by wrapping LEM-ORDERLESS's completion function
 ;;; rather than by replacing *PROMPT-COMMAND-COMPLETION-FUNCTION*: the variable
 ;;; keeps pointing at ORDERLESS-COMMAND-COMPLETION, so whichever of the two
-;;; systems is reloaded last cannot silently unhook the other.
+;;; systems is reloaded last cannot silently unhook the other.  INSTALL is the
+;;; umbrella entry point (install.lisp); it calls this and the file annotator.
 
 (defvar *original-orderless-command-completion* nil
   "The unwrapped LEM-ORDERLESS:ORDERLESS-COMMAND-COMPLETION, captured on the
 first INSTALL so that reloading replaces the wrapper instead of stacking it.")
 
-(defun install ()
+(defun install-command-annotations ()
   "Annotate M-x candidates with this system's descriptions."
   (setf *original-orderless-command-completion*
         (or *original-orderless-command-completion*
@@ -176,5 +177,3 @@ first INSTALL so that reloading replaces the wrapper instead of stacking it.")
            (funcall *original-orderless-command-completion*
                     string :candidates candidates))))
   (values))
-
-(install)
