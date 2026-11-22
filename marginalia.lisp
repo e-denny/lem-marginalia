@@ -36,10 +36,11 @@
   "Minimum width of the right-aligned keybinding column that precedes the
 command description. Widened when the current candidates carry longer ones.")
 
-(defvar *marginalia-description-width* 60
-  "Longest description, in characters. Shortened when the candidates have long
-command names, so that no row can push the popup past the frame edge (the
-popup is as wide as the prompt, which fills the frame).")
+(defvar *marginalia-description-width* nil
+  "Longest description, in characters, or NIL for all the room the row has left.
+The popup box is *PROMPT-MAX-WIDTH* columns wide (120), and the label,
+keybinding and separator columns come out of it, so the description fills what
+is left instead of stopping at a fixed 60.  A number caps it below that.")
 
 (defun marginalia-collapse-whitespace (string)
   "STRING with each run of spaces/tabs turned into one space."
@@ -53,28 +54,37 @@ popup is as wide as the prompt, which fills the frame).")
                            (write-char c s)))))))
 
 (defun marginalia-truncate (string width)
-  "STRING cut at a word boundary to at most WIDTH characters, with an ellipsis."
-  (if (<= (length string) width)
-      string
-      (let* ((cut (subseq string 0 (1- width)))
-             (space (position #\Space cut :from-end t)))
-        (concatenate 'string
-                     (if (and space (> space (floor width 2)))
-                         (subseq cut 0 space)
-                         (string-right-trim " " cut))
-                     "…"))))
+  "STRING cut to exactly WIDTH characters, with an ellipsis when it is longer.
+A hard cut, like Emacs' truncate-string-to-width: the annotation has to fit a
+fixed number of columns, and backing up to the previous word boundary gives
+away a whole word of the little room there is."
+  (cond ((<= width 0) "")
+        ((<= (length string) width) string)
+        (t (concatenate 'string (subseq string 0 (1- width)) "…"))))
+
+(defun marginalia-truncate-tail (string width)
+  "STRING cut to at most WIDTH characters from the right, with a leading ellipsis.
+That is how a path is shortened: the end of it names the file, so it is the
+beginning that goes, as with marginalia's negative :truncate widths."
+  (cond ((<= (length string) width) string)
+        ((< width 2) "")
+        (t (concatenate 'string "…" (subseq string (- (length string) (1- width)))))))
+
+(defun marginalia-first-line (doc)
+  "First non-empty line of the docstring DOC with its whitespace collapsed."
+  (when doc
+    (loop :for line :in (uiop:split-string doc :separator '(#\Newline))
+          :for text := (marginalia-collapse-whitespace
+                        (string-trim '(#\Space #\Tab #\Return) line))
+          :unless (string= text "")
+            :do (return text))))
 
 (defun marginalia-docstring (name)
   "First non-empty line of the docstring of the command named NAME, or NIL."
   (let* ((command (lem:find-command name))
          (doc (and command
                    (documentation (lem:command-name command) 'function))))
-    (when doc
-      (loop :for line :in (uiop:split-string doc :separator '(#\Newline))
-            :for text := (marginalia-collapse-whitespace
-                          (string-trim '(#\Space #\Tab #\Return) line))
-            :unless (string= text "")
-              :do (return text)))))
+    (marginalia-first-line doc)))
 
 (defun marginalia-first-keybinding (detail)
   "First binding of a keybinding list DETAIL (\"C-x C-f, F5\"), or \"\"."
@@ -100,6 +110,96 @@ frame's width is the only limit."
          (cap (and symbol (boundp symbol) (symbol-value symbol))))
     (min (lem:display-width) (or cap (lem:display-width)))))
 
+;;; Room for a :detail, in characters.
+;;;
+;;; apply-print-spec puts one space, the label padded to max-label + 1, two
+;;; spaces, the detail and one trailing space on the row, so a row is
+;;; max-label + |detail| + 4 wide and the detail gets what the box has left of
+;;; those columns.  The same 4 is what the command annotator leaves out of its
+;;; description budget on top of the label and keybinding columns, so a full
+;;; row ends at the right edge of the box instead of a couple of columns short.
+;;;
+;;; The label column is what really decides how much is left, and Lem pads it to
+;;; the longest candidate on screen.  That is fine for command and buffer names
+;;; and ruinous for the variable prompt, which completes over package-qualified
+;;; names: one 72-character name pads every row to 72 and leaves a third of the
+;;; box for the annotation.  So the label column is capped, here and in the
+;;; renderer (see the :AROUND method below), and a row whose own label is longer
+;;; than the cap simply starts its annotation after the label.
+
+(defvar *marginalia-label-column* 40
+  "Widest label column, in characters, or NIL to keep Lem's own width.
+Lem pads the label column to the longest candidate on screen, so a single long
+name takes the room of every row.")
+
+(defun marginalia-label-width (max-label)
+  "MAX-LABEL as the column actually used, capped by *MARGINALIA-LABEL-COLUMN*."
+  (if *marginalia-label-column*
+      (min max-label *marginalia-label-column*)
+      max-label))
+
+(defun marginalia-detail-budget (max-label)
+  "Characters of :detail a row with a MAX-LABEL wide label column can hold."
+  (max 10 (- (completion-popup-width) (marginalia-label-width max-label) 4)))
+
+(defun marginalia-fit-budget (max-label label)
+  "The :detail budget for LABEL in a list whose widest label is MAX-LABEL.
+Same as MARGINALIA-DETAIL-BUDGET unless LABEL is wider than the cap: the
+renderer then puts that row's detail after the label itself, with no padding,
+so only what the label leaves is usable."
+  (let ((cap *marginalia-label-column*))
+    (min (marginalia-detail-budget max-label)
+         (max 10 (- (completion-popup-width)
+                    (min (1+ max-label)
+                         (max (if cap (1+ cap) 0) (1+ (length label))))
+                    3)))))
+
+(defun marginalia-description-width (max-label key-column)
+  "Longest description next to a MAX-LABEL label and KEY-COLUMN keybinding column.
+Everything the row has left, capped by *MARGINALIA-DESCRIPTION-WIDTH* when the
+knob is set to a number."
+  (let ((available (- (completion-popup-width) 6
+                      (marginalia-label-width max-label) key-column)))
+    (max 20 (if *marginalia-description-width*
+                (min *marginalia-description-width* available)
+                available))))
+
+;;; The renderer pads the label column to (1+ max-label), so it has to use the
+;;; same cap the budgets above assume; otherwise a capped budget would be paired
+;;; with an uncapped column and every row would come up short again.  The width
+;;; is capped per row to (max cap (1+ label)), which is what keeps a long label
+;;; from moving the insertion point back into itself -- MOVE-TO-COLUMN moves
+;;; *backwards* when the column is already behind the point
+;;; (src/buffer/internal/basic.lisp:361-380).
+
+(defmethod lem/popup-menu:apply-print-spec :around
+    ((print-spec lem/completion-mode::print-spec) point item)
+  (let* ((label (lem/completion-mode:completion-item-label item))
+         (width (lem/completion-mode::label-width print-spec))
+         (capped (and *marginalia-label-column*
+                      (min width
+                           (max (1+ *marginalia-label-column*)
+                                (1+ (length label)))))))
+    (if (and capped (< capped width))
+        (call-next-method (make-instance 'lem/completion-mode::print-spec
+                                         :label-width capped)
+                          point item)
+        (call-next-method))))
+
+(defun marginalia-prompt-item (label detail)
+  "A completion item for LABEL with DETAIL that replaces the prompt's whole input.
+The prompt functions that annotate plain strings (an apropos list, a variable
+list) do not build completion items themselves -- open-prompt-completion turns
+strings into items carrying the input range -- so an annotator has to do the
+same or Tab and Return would insert at point instead of replacing the input."
+  (with-point ((start (lem/prompt-window::current-prompt-start-point))
+               (end (lem/prompt-window::current-prompt-start-point)))
+    (lem/completion-mode:make-completion-item
+     :label label
+     :detail detail
+     :start start
+     :end (line-end end))))
+
 (defun marginalia-annotate-shown-command-items (items)
   "ITEMS with each command's docstring appended after its keybindings.
 The keybinding column is right-aligned and the description column starts at
@@ -116,25 +216,30 @@ the same screen column on every row, the way marginalia aligns its fields."
          ;; apply-print-spec puts one space, the label padded to max-label + 1,
          ;; two spaces, the detail and one trailing space on the row, so the
          ;; popup's width minus those fixed columns is what is left for the
-         ;; description (the -2 keeps it inside the border).  The popup is no
-         ;; wider than the frame, and no wider than lem-vertico's cap when that
-         ;; system is loaded, so that is the width to measure against.
-         (popup-width (completion-popup-width))
-         (description-width
-           (max 20 (min *marginalia-description-width*
-                        (- popup-width 8 max-label key-column)))))
+         ;; description.  The popup is no wider than the frame, and no wider
+         ;; than lem-vertico's cap when that system is loaded, so that is the
+         ;; width to measure against -- the description takes everything the
+         ;; label and keybinding columns leave of those 120 columns rather than
+         ;; stopping at a fixed width.
+         (description-width (marginalia-description-width max-label key-column)))
     (mapcar (lambda (item)
-              (alexandria:if-let (description
-                                  (marginalia-docstring
-                                   (lem/completion-mode:completion-item-label item)))
-                (marginalia-copy-item
-                 item
-                 (format nil "~va  ~a"
-                         key-column
-                         (marginalia-first-keybinding
-                          (lem/completion-mode:completion-item-detail item))
-                         (marginalia-truncate description description-width)))
-                item))
+              (let ((label (lem/completion-mode:completion-item-label item)))
+                (alexandria:if-let (description (marginalia-docstring label))
+                  (marginalia-copy-item
+                   item
+                   (format nil "~va  ~a"
+                           key-column
+                           (marginalia-first-keybinding
+                            (lem/completion-mode:completion-item-detail item))
+                           (marginalia-truncate
+                            description
+                            ;; A command whose own name is wider than the
+                            ;; label cap has no padding to spend, so its row
+                            ;; gets only what is left after the name.
+                            (min description-width
+                                 (- (marginalia-fit-budget max-label label)
+                                    key-column 2)))))
+                  item)))
             items)))
 
 ;;; Only the candidates that will be on screen matter for the column widths,

@@ -1,6 +1,6 @@
 # lem-marginalia
 
-Marginalia-style annotations for Lem's prompts, in two parts:
+Marginalia-style annotations for Lem's prompts:
 
 - **`M-x`** — the first line of each command's docstring next to the command
   name, plus its keybindings in a right-aligned column.
@@ -11,13 +11,28 @@ Marginalia-style annotations for Lem's prompts, in two parts:
   lem/  drwxr-xr-x       4k     1d 3h ago
   ```
 
-Loading the system applies both. `lem-marginalia:install` runs the two
-installers and is idempotent, so reloading the system is safe.
+- **buffer prompts** (`C-x b`, …) — modified/read-only flags, size, major mode
+  and file name:
+
+  ```
+  *Messages*  **-     3.3k  Fundamental
+  ```
+
+- **other prompts** — variables (`describe-lem-variable`), libraries
+  (`load-library`), color themes (`load-theme`) and `apropos-command`, annotated
+  with the fields Lem actually has for them; see [Other prompts](#other-prompts).
+
+Loading the system applies all four. `lem-marginalia:install` is idempotent, so
+reloading the system is safe.
 
 Annotation is display-only: a completion item's `:detail` is what gets printed
 after the label column, selecting a candidate inserts its `:label`, and
 narrowing-down takes the common prefix of `:labels`, so annotating cannot change
-which command runs or which file is opened.
+which command runs, which file is opened or which buffer is switched to.
+
+The width of every column is measured against the popup box —
+`lem-vertico:*prompt-max-width*` when that system is loaded, the frame width
+otherwise — so an annotation uses all of the row and never widens the popup.
 
 ## Loading
 
@@ -51,6 +66,72 @@ matching marginalia.
 Only the candidates that can be on screen are annotated (`completion-mode` keeps
 the first `*limit-number-of-items*`), so a directory with thousands of entries
 costs a handful of `lstat` calls rather than thousands.
+
+## Buffer annotations
+
+The fields are Emacs' own (`marginalia--buffer-status` and
+`marginalia--buffer-file`): three status characters, the size right-aligned in
+7 columns, the major mode in 20, and the file name:
+
+```
+*Messages*  **-     3.3k  Fundamental  ~/lem/src/ext/prompt-window.lisp
+*scratch*   ---        0  Fundamental
+```
+
+The characters are the mode-line constructs: `*` for a modified buffer, `%` for
+a read-only one, `-` otherwise, then the same again for a remote directory, then
+`@`/`-` for that directory. Lem has no remote buffers to mark here, so the last
+two repeat the first and stay `-`; modified and read-only are what a buffer list
+needs to show. Sizes are `file-size-human-readable`, the same formatting the
+file annotator uses, so `4k` and `128k` read the same in both.
+
+The file column shows `buffer-filename`, or the directory for a buffer that
+lists one (`LEM/DIRECTORY-MODE` names such a buffer after its path), as
+marginalia does for dired buffers. It is truncated from the left, because the
+end of a path is the part that names the file. This replaces the file name
+lem's own `prompt-buffer-completion` puts in `:detail`, so a row gains columns
+rather than a second line.
+
+As with files and commands, only the candidates that can be on screen are
+annotated. The size counts characters, like `%I` in Emacs, not bytes.
+
+## Other prompts
+
+Lem has no completion categories, so where Emacs chooses an annotator from the
+candidate category (`marginalia-annotators`, refined by its classifiers), this
+system classifies by prompt string — the analogue of
+`marginalia-prompt-categories` — and looks the annotator up in
+`lem-marginalia:*prompt-annotators*`:
+
+| prompt | command | annotation |
+|---|---|---|
+| `Enter Variable: ` | `describe-lem-variable` | `editor`/`variable`, the value, the docstring |
+| `load library: `, `library: ` | `load-library`, `site-init-add-dependency` | `Loaded`, the system description, its directory |
+| `Color theme: ` | `load-theme` | `current`, and the theme it inherits from |
+| `Apropos: ` | `apropos-command` | the first line of each command's docstring |
+
+A variable's value is printed with a bounded `*print-length*` and cut to 16
+columns, because a value can be a keymap or an alist; the docstring gets the rest
+of the row. The fields are not padded, which is how
+`marginalia-annotate-variable` lays them out, and the class column
+(`editor`/`variable`) is dropped when every candidate has the same one: a column
+of identical words is not worth ten columns of a row that has about a hundred.
+`Loaded` and the directory come from ASDF, which is where Lem keeps a library.
+Themes have no documentation and no file in Lem's data model, so the two columns
+are what it does have.
+
+The candidates of those prompts are plain strings, so the annotator builds the
+completion items itself with the prompt's input range: Tab and Return replace the
+whole input, exactly as they do in M-x. Only the candidates that can be on screen
+are annotated.
+
+Not annotated, and why:
+
+| Emacs annotator | why not here |
+|---|---|
+| `bookmark` | Lem's bookmark struct holds a name, a filename and a position — no context strings; the file name is already the candidate's `:detail` |
+| `function`, `symbol`, `imenu` | no prompt over the running image's symbols; a language-mode prompt would cost one connection round trip per candidate |
+| `coding-system`, `charset`, `input-method`, `minor-mode`, `customize-group`, `face`, `color`, `package`, `environment-variable`, `tab`, `frame`, `embark-keybinding`, `multi-category` | no such prompt exists in Lem (no customize, package manager, tab bar, Embark or mixed-source prompt; `prompt-for-character` reads a key, not a list) |
 
 ## Colors
 
@@ -92,14 +173,37 @@ other rows show theirs.
 
 | variable | default | meaning |
 |---|---|---|
-| `lem-marginalia:*marginalia-description-width*` | 60 | longest command description, in characters |
+| `lem-marginalia:*marginalia-description-width*` | nil | longest command description, in characters; nil fills the row |
 | `lem-marginalia:*marginalia-key-column*` | 12 | minimum width of the keybinding column |
+| `lem-marginalia:*marginalia-label-column*` | 40 | widest label column before the annotation; nil keeps Lem's own width |
+| `lem-marginalia:*marginalia-buffer-mode-width*` | 20 | width of the major mode column in buffer prompts |
 | `lem-marginalia:*marginalia-max-relative-age*` | 14 days | younger file entries get a relative age, older ones a date |
 
-The description column is shortened when the candidate labels or keybindings are
-long, using the popup width: `lem-vertico:*prompt-max-width*` when that system is
-loaded, the frame width otherwise, so a row can never push the popup wider than
-the prompt.
+`lem-marginalia:*prompt-annotators*` is the prompt-to-annotator alist; push a
+`(substring . function)` pair to annotate another prompt, or set it to nil to
+turn the prompt classifier off. The functions receive the candidate strings and
+return completion items built with the internal `marginalia-prompt-item`.
+
+The label column is capped at `*marginalia-label-column*`. Lem pads it to the
+longest candidate on screen, so one long name takes the room of every row — a
+prompt completing over package-qualified variable names
+(`lem-lsp-base/protocol-3-17:failure-handling-kind-transactional` is 72 columns)
+would otherwise leave the annotation a third of the box and truncate every
+description to a few words. Rows whose own label is longer than the cap start
+their annotation right after the label; `nil` restores Lem's own width. The cap
+is applied by an `:around` method on the popup's `apply-print-spec`, so it holds
+for every completion list, not only the prompts annotated here.
+
+The description column is what the row has left: the box is
+`lem-vertico:*prompt-max-width*` columns wide (120 by default), the frame width
+when that system is not loaded, and the label and keybinding columns come out of
+it. A description therefore runs to the right edge of the box — about 70 columns
+next to a typical command name — instead of stopping at a fixed 60, which is what
+Emacs' marginalia would do with its half-the-window `marginalia-field-width`
+rule. It is cut at the column, like `truncate-string-to-width`, not backed up to
+the previous word boundary: a word boundary gave away a whole word of the few
+columns an annotation has. Setting the knob to a number caps it below that, and
+a row can never push the popup wider than the prompt.
 
 ## Requires
 
